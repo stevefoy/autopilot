@@ -1,0 +1,148 @@
+#!/usr/bin/perl -w
+# $Id: splitlog,v 1.4 2002/08/20 17:43:07 tramm Exp $
+#
+# Program to convert output of control board into decimal values
+# for plotting with gnuplot, etc.
+#
+
+use strict;
+$| = 1;
+
+open PPM, ">ppm";
+open ADC, ">adc";
+open RPM, ">rpm";
+
+my $time = 0;
+
+sub hexvalues
+{
+	my @v;
+
+	for (@_)
+	{
+		return unless /^[0-9A-Fa-f]/;
+		push @v, hex $_;
+	}
+
+	return @v;
+}
+
+
+my @adc_offsets = (
+	[ 0, 1 ],
+	[ 0, 1 ],
+	[ 0, 1 ],
+	[ 16950, 1.325 ],	# Pitch accel
+	[ 19600, 1.325 ],	# Roll accel
+	[ 18250, 3.388 ],	# Yaw rate
+	[ 12175, 3.388 ],	# Pitch rate
+	[ 11250, 3.388 ],	# Roll rate
+);
+
+my $ppm_offset = 8000 * 1.5;
+my $ppm_scale = 2;
+
+my %handlers = (
+	GPADC	=> sub {
+		my @adc = hexvalues @_
+			or warn "GPADC: Invalid input: @_\n"
+			and return;
+
+		return unless @adc == 8;
+
+		for my $i (0..7)
+		{
+			my ($offset,$gain) = @{ $adc_offsets[$i] };
+			$adc[$i] -= $offset;
+			$adc[$i] *= $gain;
+		}
+
+		print ADC "$time @adc\n";
+		$time = sprintf "%3.3f", $time + 1.0 / 30.0;
+	},
+
+	GPPPM	=> sub {
+		my @ppm = hexvalues @_
+			or warn "GPPPM: Invalid input: @_\n"
+			and return;
+
+		return unless @ppm == 9;
+
+		$_ = ($_ - $ppm_offset) * $ppm_scale
+			for @ppm;
+
+		print PPM "$time @ppm\n";
+	},
+
+	GPRPM	=> sub {
+		my ($n1,$n2) = hexvalues @_
+			or warn "GPRPM: Invalid input: @_\n"
+			and return;
+
+		print RPM "$time $n1 $n2\n";
+	},
+);
+
+while(<>)
+{
+	s/[\r\n]//g;
+
+	next unless /^\$GP(ADC|PPM)/;
+
+	warn "Garbled line: $_\n" and next
+		if /\$.*\$/;
+	
+	my ($type,$values) = /
+		^
+		\$(.*?),
+		([^\$]*)
+	/x
+		or warn "Unable to parse: $@\n"
+		and next;
+
+	
+	$handlers{$type}->( split /,/, $values )
+		if exists $handlers{$type};
+}
+
+__END__
+	my ($auto,$mode,$tach,$adc,$ppm) = /
+		^
+		([AM])
+		([0-9A-F])
+		\s
+		([0-9A-F]+)
+		\s
+		([0-9A-F]+)
+		\s
+		([0-9A-F!]+)
+	/x
+		or warn "Unable to parse: $_\n"
+		and next;
+
+	$mode = hex $mode;
+
+	my @adc = map { hex $_ } $adc =~ /([0-9A-F][0-9A-F][0-9A-F][0-9A-F])/g;
+	if( @adc != 8 )
+	{
+		print STDERR "Invalid ADC input: $_\n";
+		next;
+	}
+
+	my @rpm = map { hex $_ } $tach =~ /([0-9A-F][0-9A-F])/g;
+
+	next if $ppm eq '!';
+
+	my @ppm = map { hex $_ } $ppm =~ /([0-9A-F][0-9A-F][0-9A-F][0-9A-F])/g;
+	if( @ppm != 9 )
+	{
+		print STDERR "Invalid PPM input: $_\n";
+		next;
+	}
+
+	print PPM "@ppm\n";
+	print ADC "@adc\n";
+	print RPM "$mode @rpm\n";
+
+	#print "$adc[3] $adc[4] $adc[5] $adc[6] $adc[7]\n";
+}

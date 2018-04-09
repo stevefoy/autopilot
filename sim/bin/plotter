@@ -1,0 +1,196 @@
+#!/usr/bin/perl -w
+# $Id: plotter,v 2.0 2002/09/22 02:07:28 tramm Exp $
+#
+use strict;
+use Tk;
+
+#my $dir = "/home/hudson/autopilot/imu-data/2002-06-30/flight4";
+my $dir		= ".";
+my $adc		= "$dir/adc";
+my $ppm		= "$dir/ppm";
+my $low		= -32768;
+my $high	= 32768;
+my $start	= 0;
+my $stop	= 800;
+my $step	= 0.25;
+
+my $mw = MainWindow->new(
+	-title		=> "Plotter",
+) or die "Unable to open window: $@\n";
+
+open GNUPLOT, "|gnuplot";
+select GNUPLOT;
+$|=1;
+
+my @channels =
+(
+	{
+		name		=> "Pitch accel",
+		enabled		=> 1,
+		channel		=> 4,
+		file		=> $adc,
+	},
+	{
+		name		=> "Roll accel",
+		enabled		=> 1,
+		channel		=> 5,
+		file		=> $adc,
+	},
+	{
+		name		=> "Yaw rate",
+		enabled		=> 1,
+		channel		=> 6,
+		file		=> $adc,
+	},
+	{
+		name		=> "Pitch rate",
+		enabled		=> 1,
+		channel		=> 7,
+		file		=> $adc,
+	},
+	{
+		name		=> "Roll rate",
+		enabled		=> 1,
+		channel		=> 8,
+		file		=> $adc,
+	},
+
+	{
+		name		=> "Roll command",
+		enabled		=> 0,
+		channel		=> 1,
+		file		=> $ppm,
+	},
+	{
+		name		=> "Pitch command",
+		enabled		=> 0,
+		channel		=> 2,
+		file		=> $ppm,
+	},
+	{
+		name		=> "Throttle command",
+		enabled		=> 0,
+		channel		=> 3,
+		file		=> $ppm,
+	},
+	{
+		name		=> "Yaw command",
+		enabled		=> 0,
+		channel		=> 4,
+		file		=> $ppm,
+	},
+	{
+		name		=> "Collective command",
+		enabled		=> 0,
+		channel		=> 6,
+		file		=> $ppm,
+	},
+	{
+		name		=> "Mode command",
+		enabled		=> 0,
+		channel		=> 7,
+		file		=> $ppm,
+	},
+);
+
+$mw->Button(
+	-text		=> 'Replot',
+	-command	=> \&replot,
+)->pack(
+	-side		=> 'bottom',
+	-expand		=> 1,
+	-fill		=> 'x',
+);
+
+
+$mw->Scale(
+	-from		=> 0,
+	-to		=> $stop,
+	-variable	=> \$start,
+	-orient		=> 'horiz',
+	-command	=> sub {
+		$stop = $start if $stop < $start;
+	},
+)->pack(
+	-side		=> 'bottom',
+	-expand		=> 1,
+	-fill		=> 'x',
+);
+
+$mw->Scale(
+	-from		=> 0,
+	-to		=> $stop,
+	-variable	=> \$stop,
+	-orient		=> 'horiz',
+	-command	=> sub {
+		$start = $stop if $stop < $start;
+	},
+)->pack(
+	-side		=> 'bottom',
+	-expand		=> 1,
+	-fill		=> 'x',
+);
+
+
+
+$mw->Scale(
+	-from		=> $low,
+	-to		=> $high,
+	-variable	=> \$low,
+	-command	=> sub {
+		$high = $low if $high < $low;
+	},
+)->pack(
+	-side		=> 'right',
+	-expand		=> 1,
+	-fill		=> 'y',
+);
+
+$mw->Scale(
+	-from		=> $low,
+	-to		=> $high,
+	-variable	=> \$high,
+	-command	=> sub {
+		$low = $high if $high < $low;
+	},
+)->pack(
+	-side		=> 'right',
+	-expand		=> 1,
+	-fill		=> 'y',
+);
+
+
+my $f = $mw->Frame(
+)->pack(
+	-side		=> 'left',
+);
+
+for my $channel (@channels)
+{
+	$f->Checkbutton(
+		-variable	=> \$channel->{enabled},
+		-text		=> $channel->{name},
+		-anchor		=> 'w',
+		-justify	=> 'left',
+		-width		=> 12,
+	)->pack(
+		-side		=> 'top',
+	);
+}
+
+
+sub replot
+{
+	my $channels =
+		join ', ',
+		map {
+			my $channel = $_->{channel}+1;
+			qq/"$_->{file}" using 1:$channel title "$_->{name}" with lines/
+		}
+		grep { $_->{enabled} }
+		@channels;
+
+	print GNUPLOT "plot [$start:$stop] [$low:$high] $channels\n";
+}
+
+MainLoop;

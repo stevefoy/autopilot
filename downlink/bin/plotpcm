@@ -1,0 +1,52 @@
+#!/usr/bin/perl -w
+# $Id: plotpcm,v 1.2 2003/01/29 03:51:33 tramm Exp $
+#
+# Super simple program to produce PNG files from the PCM logs output
+# by the PCM detector.
+#
+# (c) Trammell Hudson <hudson@rotomotion.com>
+#
+
+use strict;
+use warnings;
+use GD;
+
+my $y = 0;
+
+my $width	= 760;
+my $image = GD::Image->new( $width, 700 );
+my $white = $image->colorAllocate( 255, 255, 255 );
+my $black = $image->colorAllocate(   0,   0,   0 );
+
+while(<>)
+{
+	chomp;
+
+	my $x = 0;
+
+	# Fill in the missing sync pulses
+#	s/^/3C003C/;
+#	s/ /3C003C/;
+#	s/ /3FFFC3/;
+#	s/ /3FFFC3/;
+
+	for (split //)
+	{
+		next if / /;
+
+		my $val = hex $_;
+
+		for my $bit (8,4,2,1)
+		{
+			my $color = $val & $bit ? $white : $black;
+
+			$image->setPixel( $x, $y, $color );
+
+			$x++;
+		}
+	}
+
+	$y++;
+}
+
+print $image->png;

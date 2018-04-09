@@ -1,0 +1,454 @@
+#!/usr/bin/perl -w
+# $Id: plotter,v 1.6 2002/08/25 04:05:08 tramm Exp $
+
+use strict;
+use warnings;
+use Tk;
+use Getopt::Long;
+
+my $high	= 32768;
+my $low		= -$high;
+my $title;
+my $start	= 0;
+my $stop	= 0;
+my $step	= 30;
+my $term;
+my $dt		= 1.0 / 30.0;
+my $width	= 1024;
+my $height	= 480;
+my $batch;
+
+my @adc;
+my @ppm;
+my @rpm;
+
+
+my @channels =
+(
+	{
+		name		=> "Pitch accel",
+		arg		=> "pitch-accel",
+		enabled		=> 1,
+		channel		=> 3,
+		file		=> \@adc,
+		offset		=> 16950,
+		scale		=> 1.325,
+	},
+	{
+		name		=> "Roll accel",
+		arg		=> 'roll-accel',
+		enabled		=> 1,
+		channel		=> 4,
+		file		=> \@adc,
+		offset		=> 19600,
+		scale		=> 1.325,
+	},
+	{
+		name		=> "Yaw rate",
+		arg		=> 'yaw-rate',
+		enabled		=> 1,
+		channel		=> 5,
+		file		=> \@adc,
+		offset		=> 18250,
+		scale		=> 3.388,
+	},
+	{
+		name		=> "Pitch rate",
+		arg		=> 'pitch-rate',
+		enabled		=> 1,
+		channel		=> 6,
+		file		=> \@adc,
+		offset		=> 12175,
+		scale		=> 3.388,
+	},
+	{
+		name		=> "Roll rate",
+		arg		=> 'roll-rate',
+		enabled		=> 1,
+		channel		=> 7,
+		file		=> \@adc,
+		offset		=> 11250,
+		scale		=> 3.388,
+	},
+
+	{
+		name		=> "Roll command",
+		arg		=> 'roll-command',
+		enabled		=> 0,
+		channel		=> 0,
+		file		=> \@ppm
+	},
+	{
+		name		=> "Pitch command",
+		arg		=> 'pitch-command',
+		enabled		=> 0,
+		channel		=> 1,
+		file		=> \@ppm
+	},
+	{
+		name		=> "Throttle command",
+		arg		=> 'throttle-command',
+		enabled		=> 0,
+		channel		=> 2,
+		file		=> \@ppm
+	},
+	{
+		name		=> "Yaw command",
+		arg		=> 'yaw-command',
+		enabled		=> 0,
+		channel		=> 3,
+		file		=> \@ppm
+	},
+	{
+		name		=> "Collective command",
+		arg		=> 'coll-command',
+		enabled		=> 0,
+		channel		=> 5,
+		file		=> \@ppm
+	},
+	{
+		name		=> "Mode command",
+		arg		=> 'mode-command',
+		enabled		=> 0,
+		channel		=> 6,
+		file		=> \@ppm
+	},
+);
+
+
+my $auto_zero = 30;
+
+
+Getopt::Long::Configure( 'no_ignore_case' );
+
+GetOptions(
+	't|term=s'	=> \$term,
+	"T|title=s"	=> \$title,
+
+	'S|step=i'	=> \$step,
+	'd|dt=f'	=> \$dt,
+	's|start=f'	=> \$start,
+	'e|end=f'	=> \$stop,
+
+	'h|high=f'	=> \$high,
+	'l|low=f'	=> \$low,
+
+	'b|batch!'	=> \$batch,
+	'w|width=i'	=> \$width,
+	'H|height=i'	=> \$height,
+	'a|auto=i'	=> \$auto_zero,
+
+	map(
+		(
+			"$_->{arg}!"		=> \$_->{enabled},
+			"$_->{arg}-offset=f"	=> \$_->{offset},
+			"$_->{arg}-scale=f"	=> \$_->{scale},
+		),
+		@channels
+	),
+) or die "Unknown argument\n";
+
+
+# Build our mapping of ADC channels
+my @adc_channels;
+
+for (grep { $_->{file} == \@adc } @channels)
+{
+	$adc_channels[$_->{channel}] = $_;
+	$_->{offset} = 0 if $auto_zero;
+}
+
+
+sub hexvalues
+{
+	my @v;
+
+	for (@_)
+	{
+		return unless /^[0-9A-Fa-f]/;
+		push @v, hex $_;
+	}
+
+	return @v;
+}
+
+
+
+my $ppm_offset = 8000 * 1.5;
+my $ppm_scale = 2;
+
+# Read in our flight log data and parse it
+my $time = 0;
+
+my %handlers = (
+	GPADC	=> sub {
+		my @values = hexvalues @_
+			or warn "GPADC: Invalid input: @_\n"
+			and return;
+
+		return unless @values == 8;
+
+		for my $i (0..7)
+		{
+			my $channel = $adc_channels[$i]
+				or next;
+
+			if( $auto_zero > 0 )
+			{
+				$channel->{offset} += $values[$i];
+			} elsif( $auto_zero == 0 )
+			{
+				$channel->{offset} /= $time;
+			}
+
+			$values[$i] -= $channel->{offset};
+			$values[$i] *= $channel->{scale};
+		}
+
+		push @adc, \@values;
+		$time++;
+		$auto_zero--;
+	},
+
+	GPPPM	=> sub {
+		my @values = hexvalues @_
+			or warn "GPPPM: Invalid input: @_\n"
+			and return;
+
+		return unless @values == 9;
+
+		$_ = ($_ - $ppm_offset) * $ppm_scale
+			for @values;
+
+		$ppm[$time] = \@values;
+	},
+
+	GPRPM	=> sub {
+		my @values = hexvalues @_
+			or warn "GPRPM: Invalid input: @_\n"
+			and return;
+
+		$rpm[$time] = \@values;
+	},
+);
+
+
+$title = $ARGV[0] unless defined $title;
+my @files = @ARGV;
+
+while(<>)
+{
+	s/[\r\n]//g;
+
+	next unless /^\$GP(ADC|PPM)/;
+
+	warn "Garbled line: $_\n" and next
+		if /\$.*\$/;
+	
+	my ($type,$values) = /
+		^
+		\$(.*?),
+		([^\$]*)
+	/x
+		or warn "Unable to parse: $@\n"
+		and next;
+
+	
+	$handlers{$type}->( split /,/, $values )
+		if exists $handlers{$type};
+}
+
+
+$stop ||= $time * $dt;
+
+
+open GNUPLOT, "|gnuplot -noraise -geometry 1024x480";
+select((select(GNUPLOT), $| = 1)[0]);
+
+print GNUPLOT <<"";
+	set title "$title"
+
+my $x_scale = $width / 640;
+my $y_scale = $height / 480;
+
+print GNUPLOT <<"" if defined $term;
+	set term $term
+	set size $x_scale, $y_scale
+
+if( $batch )
+{
+	print STDERR "Reploting\n";
+	replot( \*GNUPLOT );
+	print STDERR "Done\n";
+}
+else
+{
+
+my $mw = MainWindow->new(
+	-title		=> "Plotter",
+) or die "Unable to open window: $@\n";
+
+$mw->Button(
+	-text		=> 'Replot',
+	-command	=> sub { replot( \*GNUPLOT ) },
+)->pack(
+	-side		=> 'bottom',
+	-expand		=> 1,
+	-fill		=> 'x',
+);
+
+$mw->Button(
+	-text		=> 'Output command',
+	-command	=> sub {
+		print "$0";
+
+		print " --", $_->{enabled} ? '' : 'no', $_->{arg}
+			for @channels;
+
+		print " --start=$start";
+		print " --end=$stop";
+		print " --high=$high";
+		print " --low=$low";
+		print " --dt=$dt";
+		print " --step=$step";
+		print " --batch";
+		print " --term='png color'";
+
+		print " @files\n";
+	},
+)->pack(
+	-side		=> 'bottom',
+	-expand		=> 1,
+	-fill		=> 'x',
+);
+
+$mw->Scale(
+	-from		=> 0,
+	-to		=> $stop,
+	-variable	=> \$start,
+	-orient		=> 'horiz',
+	-command	=> sub {
+		$start = $stop if $stop < $start;
+	},
+)->pack(
+	-side		=> 'bottom',
+	-expand		=> 1,
+	-fill		=> 'x',
+);
+
+$mw->Scale(
+	-from		=> 0,
+	-to		=> $stop,
+	-variable	=> \$stop,
+	-orient		=> 'horiz',
+	-command	=> sub {
+		$stop = $start if $stop < $start;
+	},
+)->pack(
+	-side		=> 'bottom',
+	-expand		=> 1,
+	-fill		=> 'x',
+);
+
+$mw->Scale(
+	-from		=> 1,
+	-to		=> 30,
+	-variable	=> \$step,
+	-orient		=> 'horiz',
+)->pack(
+	-side		=> 'bottom',
+	-expand		=> 1,
+	-fill		=> 'x',
+);
+
+
+
+$mw->Scale(
+	-from		=> $low,
+	-to		=> $high,
+	-variable	=> \$low,
+	-resolution	=> 100,
+	-command	=> sub {
+		$low = $high if $high < $low;
+	},
+)->pack(
+	-side		=> 'right',
+	-expand		=> 1,
+	-fill		=> 'y',
+);
+
+$mw->Scale(
+	-from		=> $low,
+	-to		=> $high,
+	-variable	=> \$high,
+	-resolution	=> 100,
+	-command	=> sub {
+		$high = $low if $high < $low;
+	},
+)->pack(
+	-side		=> 'right',
+	-expand		=> 1,
+	-fill		=> 'y',
+);
+
+
+my $f = $mw->Frame(
+)->pack(
+	-side		=> 'left',
+);
+
+for my $channel (@channels)
+{
+	$f->Checkbutton(
+		-variable	=> \$channel->{enabled},
+		-text		=> $channel->{name},
+		-anchor		=> 'w',
+		-justify	=> 'left',
+		-width		=> 12,
+	)->pack(
+		-side		=> 'top',
+	);
+}
+
+MainLoop;
+}
+
+
+sub replot
+{
+	my $fd		= shift;
+	my $channels	=
+		join ', ',
+		map { qq/"-" title "$_->{name}" with lines/ }
+		grep { $_->{enabled} }
+		@channels;
+
+	print $fd "plot [$start:$stop] [$low:$high] $channels\n";
+
+	my $start_index	= int( $start / $dt );
+	my $stop_index	= int( $stop / $dt );
+
+	for (grep { $_->{enabled} } @channels)
+	{
+		my $data	= $_->{file};
+		my $channel	= $_->{channel};
+		my $time	= $start;
+
+		for(
+			my $i = $start_index ;
+			$i < $stop_index ;
+			$i += $step, $time += $step * $dt
+		)
+		{
+			next unless defined $data->[$i][$channel];
+
+			printf $fd "%3.2f %3.2f\n",
+				$time,
+				$data->[$i][$channel],
+			;
+		}
+
+		print $fd "e\n";
+	}
+}
+

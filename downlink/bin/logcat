@@ -1,0 +1,12 @@
+#!/usr/bin/perl
+use warnings;
+use strict;
+
+$|=1;
+
+while(<>)
+{
+	my $time = time;
+
+	print "$time: $_";
+}

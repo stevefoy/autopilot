@@ -1,0 +1,26 @@
+#!/usr/bin/perl -n
+# $Id: lowpass,v 1.1 2002/07/27 19:45:31 tramm Exp $
+#
+# Very simplistic low-pass filter for ADC samples.
+#
+use strict;
+
+my $samples	= 8;
+my @sum		= (0) x 8;
+my @values	= ([(0) x 8]) x $samples;
+
+while(<>)
+{
+	chomp;
+
+	my @adc = split / /;
+	my $old_adc = shift @values;
+
+	$sum[$_] += $adc[$_] - $old_adc->[$_]
+		for (0..7);
+
+	push @values, \@adc;
+
+	#print $_, " ", $sum / @values, "\n";
+	print join( ' ', map { $_ / @values } @sum ), "\n";
+}

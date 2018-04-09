@@ -1,0 +1,167 @@
+#!/usr/bin/perl -w
+# $Id: perl-rpv,v 2.0 2002/09/22 02:07:28 tramm Exp $
+#
+# More complex program to demonstrate the SWIG interface and a Tk
+# widget set for selecting waypoints.
+#
+# (c) Trammell Hudson
+#
+
+use strict;
+use Tk;
+use lib "./lib";
+use Controller;
+
+#
+# Contact our state server
+#
+my $sock = Controller::controller_reset(
+	"localhost",	# Server
+	2002		# Port
+) or die "Unable to contact server\n";
+
+my @desired = (
+	 0,		# North
+	 0,		# East
+	-5,		# Down
+	 0		# Heading
+);
+
+
+
+#
+# Setup the simple GUI
+#
+my $width		= 400;
+my $height		= 400;
+my $scale		= 30;
+
+my $mw = MainWindow->new(
+	-title		=> 'rpv',
+) or die "Unable to open window on display $ENV{DISPLAY}: $@\n";
+
+my $f = $mw->Frame(
+)->pack(
+	-side		=> 'left',
+);
+
+my $c = $f->Canvas(
+	-width		=> $width,
+	-height		=> $height,
+)->pack(
+	-side		=> 'top',
+	-anchor		=> 'nw',
+	-expand		=> 0,
+	-fill		=> 'both',
+);
+
+my $desired;
+my $current;
+
+set_desired( @desired );
+
+
+#
+# Click anywhere in the canvas to set the desired point
+#
+$c->Tk::bind( $c, '<Button-1>', sub {
+	my $ev = $c->XEvent;
+	my ($canv_x, $canv_y) = ($ev->x, $ev->y);
+
+	# Scale the XY to our desired position
+	my $e = ($canv_x - $width / 2) * $scale / $width;
+	my $n = ($height / 2 - $canv_y) * $scale / $height;
+	print "Go to: $n $e\n";
+
+	$desired[0] = $n;
+	$desired[1] = $e;
+	set_desired( @desired );
+} );
+
+#
+# A slider along the bottom will select our heading
+#
+$f->Scale(
+	-from		=> -3.1415,
+	-to		=>  3.1415,
+	-showvalue	=> 0,
+	-variable	=> \$desired[3],
+	-command	=> sub { set_desired( @desired ) },
+	-orient		=> 'horizontal',
+	-resolution	=> 3.1415 / 16,
+)->pack(
+	-side		=> 'bottom',
+	-expand		=> 1,
+	-fill		=> 'x',
+);
+
+#
+# A slider along the side will select our altitude
+#
+$mw->Scale(
+	-from		=> -25,
+	-to		=> -1,
+	-showvalue	=> 0,
+	-variable	=> \$desired[2],
+	-command	=> sub { set_desired( @desired ) },
+	-orient		=> 'vertical',
+)->pack(
+	-side		=> 'right',
+	-expand		=> 1,
+	-fill		=> 'y',
+);
+
+while( Controller::controller_connected() )
+{
+	$mw->update;
+
+	my ($rc,$n,$e,$d,$r,$p,$h) = Controller::controller_step();
+
+	next if $rc == 0;
+	last if $rc < 0;
+
+	set_current( $n, $e, $d, $h );
+	
+}
+
+
+sub set_desired
+{
+	my ($n,$e,$d,$h) = @_;
+
+	Controller::controller_set( @_ );
+	$c->delete( $desired ) if $desired;
+
+	$desired = draw_dot( $c, 'blue', $n, $e, $d, $h );
+
+}
+
+
+sub set_current
+{
+	my ($n,$e,$d,$h) = @_;
+	$c->delete( $current) if $current;
+
+	$current = draw_dot( $c, 'red', $n, $e, $d, $h );
+}
+
+
+sub draw_dot
+{
+	my ($c,$color,$n,$e,$d,$h) = @_;
+
+	#my $e = ($canv_x - $width / 2) * $scale / $width;
+	#my $n = ($height / 2 - $canv_y) * $scale / $height;
+
+	$n *= $height / $scale;
+	$e *= $width / $scale;
+
+	$n = $height / 2 - $n;
+	$e = $e + $width / 2;
+
+	$c->createRectangle(
+		$e - 2, $n - 2,
+		$e + 2, $n + 2,
+		-fill		=> $color,
+	);
+}
